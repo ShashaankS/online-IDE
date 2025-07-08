@@ -1,12 +1,14 @@
 "use client"
 
 import { useState } from "react"
-import { loadEnvConfig } from '@next/env'
+import Editor from "@monaco-editor/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { Play, RotateCcw, Send, Minus, Plus, Loader2 } from "lucide-react"
+import axios from 'axios';
+// Import new icons
+import { Play, RotateCcw, Minus, Plus, Loader2, CheckCircle2, XCircle, Clock, Database } from "lucide-react"
 import Footer from "@/components/footer"
 import Header from "@/components/header"
 
@@ -15,18 +17,20 @@ const cpp_code = `#include <bits/stdc++.h>
 using namespace std;
 
 int main() {
-    cout << "Hello, C++!" << endl;
+    cout << "hello" << endl;
     return 0;
 }
 `;
-
-const py_code = `print("Hello, Python!")`;
+const py_code = `print("hello")`;
 
 // Judge0 Language IDs
 const languageMap = {
   cpp: 52,    // C++ (GCC 7.4.0)
   python: 71, // Python (3.8.1)
 };
+
+const monacoLanguageMap = { cpp: "cpp", python: "python" };
+const monacoThemeMap = { light: "light", dark: "vs-dark", monokai: "monokai" };
 
 // Backend API URL
 const API_URL = process.env.BACKEND_BASE_URL;
@@ -35,155 +39,180 @@ export default function Home() {
   const [code, setCode] = useState(cpp_code)
   const [sampleInput, setSampleInput] = useState("")
   const [language, setLanguage] = useState("cpp")
-  const [theme, setTheme] = useState("light")
-  const [fontSize, setFontSize] = useState(14)
+  const [theme, setTheme] = useState("dark")
+  const [fontSize, setFontSize] = useState(16)
+  const [fontFamily, setFontFamily] = useState("Fira Code")
 
-  // State for API interaction
   const [output, setOutput] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [status, setStatus] = useState("Output will appear here...")
+  const [status, setStatus] = useState("Ready to run.")
 
   const handleLanguageChange = (lang) => {
     setLanguage(lang);
     setCode(lang === 'cpp' ? cpp_code : py_code);
-    setOutput(null); // Clear output on language change
+    setOutput(null);
   }
   
   const handleReset = () => {
     setCode(language === 'cpp' ? cpp_code : py_code);
     setOutput(null);
-    setStatus("Output will appear here...");
+    setStatus("Ready to run.");
   }
 
   const handleExecuteCode = async () => {
     if (isLoading) return;
     setIsLoading(true);
     setOutput(null);
-    setStatus("Submitting code...");
+    setStatus("Executing...");
 
     try {
-      // Step 1: Submit code and get a token
-      const submitResponse = await fetch(`${API_URL}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          language_id: languageMap[language],
-          source_code: code,
-          stdin: sampleInput,
-        }),
-      });
+      // Construct the payload with the current code, language, and input
+      const payload = {
+        language_id: languageMap[language],
+        source_code: code,
+        stdin: sampleInput,
+      };
 
-      if (!submitResponse.ok) {
-        throw new Error(`Submission failed: ${submitResponse.statusText}`);
-      }
+      // Make a single POST request and await the full result.
+      // The backend's /submit endpoint must now wait for execution to complete.
+      const response = await axios.post(`${API_URL}/submit`, payload);
 
-      const { token } = await submitResponse.json();
-      setStatus("Code submitted, executing...");
+      // The response.data should now contain the full output object
+      const resultData = response.data;
 
-      // Step 2: Poll for the result
-      const pollInterval = setInterval(async () => {
-        const resultResponse = await fetch(`${API_URL}/result/${token}`);
-        const resultData = await resultResponse.json();
-        
-        // Status IDs 1 (In Queue) and 2 (Processing) mean it's not done yet.
-        if (resultData.status && resultData.status.id > 2) {
-          clearInterval(pollInterval);
-          setIsLoading(false);
-          setOutput(resultData);
-          setStatus(`Execution finished: ${resultData.status.description}`);
-        }
-      }, 2000); // Poll every 2 seconds
+      // Set the output and update the status
+      setOutput(resultData);
+      setStatus("Finished.");
 
     } catch (error) {
       console.error("An error occurred:", error);
-      setStatus(`Error: ${error.message}`);
+
+      // Handle potential errors from the API call
+      let errorMessage = "An unknown error occurred";
+      if (axios.isAxiosError(error) && error.response) {
+        // If the backend returns a structured error, display it
+        const { stderr, compile_output, message } = error.response.data;
+        errorMessage = stderr || compile_output || message || error.message;
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      
+      setStatus(`Error: ${errorMessage}`);
+      
+      // Also, you can set the output to show the error in the terminal
+      setOutput({
+          stderr: errorMessage,
+          status: { description: 'Error' }
+      });
+
+    } finally {
+      // Ensure loading state is turned off regardless of success or failure
       setIsLoading(false);
     }
-  }
+  };
+
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={`min-h-screen ${theme === 'light' ? 'bg-background' : 'bg-gray-900 text-white'}`}>
       <Header/>
-
-      {/* Main Content */}
       <div className="container mx-auto p-4">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-8rem)]">
           {/* Code Editor Pane */}
-          <Card className="flex flex-col">
-            <CardHeader className="pb-3">
+          <Card className="flex flex-col bg-transparent border-gray-700">
+             {/* ... Header with language, theme, font selectors ... */}
+             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg">Code Editor</CardTitle>
-                 {/* ... Font size controls ... */}
+                <div className="flex items-center space-x-2">
+                  <Button variant="outline" size="sm" onClick={() => setFontSize(Math.max(10, fontSize - 1))}><Minus className="h-3 w-3" /></Button>
+                  <span className="text-sm font-mono w-8 text-center">{fontSize}</span>
+                  <Button variant="outline" size="sm" onClick={() => setFontSize(Math.min(24, fontSize + 1))}><Plus className="h-3 w-3" /></Button>
+                </div>
               </div>
 
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2">
-                  <label className="text-sm font-medium">Language:</label>
-                  <Select value={language} onValueChange={handleLanguageChange}>
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="python">Python</SelectItem>
-                      <SelectItem value="cpp">C++</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                 {/* ... Theme selector ... */}
+              <div className="flex items-center space-x-4 mt-2">
+                 <Select value={language} onValueChange={handleLanguageChange}>
+                    <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="python">Python</SelectItem><SelectItem value="cpp">C++</SelectItem></SelectContent>
+                 </Select>
+                 <Select value={theme} onValueChange={setTheme}>
+                    <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="light">Light</SelectItem><SelectItem value="dark">Dark</SelectItem><SelectItem value="monokai">Monokai</SelectItem></SelectContent>
+                 </Select>
+                 <Select value={fontFamily} onValueChange={setFontFamily}>
+                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="Fira Code">Fira Code</SelectItem><SelectItem value="JetBrains Mono">JetBrains Mono</SelectItem><SelectItem value="Courier New">Courier New</SelectItem></SelectContent>
+                 </Select>
               </div>
             </CardHeader>
-
-            <CardContent className="flex-1 flex flex-col">
-              <Textarea
+            <CardContent className="flex-1 flex flex-col p-0 mt-2">
+              <Editor
+                height="100%"
+                language={monacoLanguageMap[language]}
+                theme={monacoThemeMap[theme]}
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
-                className="flex-1 font-mono resize-none"
-                style={{ fontSize: `${fontSize}px` }}
-                placeholder="Write your code here..."
+                onChange={(value) => setCode(value || "")}
+                options={{ fontSize, fontFamily, minimap: { enabled: false }, scrollBeyondLastLine: false }}
               />
-
               <div className="flex items-center space-x-2 mt-4">
                 <Button onClick={handleExecuteCode} disabled={isLoading} className="flex items-center space-x-2">
                   {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                  <span>{isLoading ? "Running..." : "Run Code"}</span>
+                  <span>{isLoading ? status : "Run Code"}</span>
                 </Button>
-                <Button onClick={handleExecuteCode} disabled={isLoading} variant="default" className="flex items-center space-x-2">
-                  <Send className="h-4 w-4" />
-                  <span>Submit</span>
-                </Button>
-                <Button onClick={handleReset} variant="outline" className="flex items-center space-x-2 bg-transparent">
-                  <RotateCcw className="h-4 w-4" />
-                  <span>Reset</span>
+                <Button onClick={handleReset} variant="outline" className="flex items-center space-x-2">
+                  <RotateCcw className="h-4 w-4" /><span>Reset</span>
                 </Button>
               </div>
             </CardContent>
           </Card>
 
-          {/* Input/Output/Terminal Pane */}
-          <Card className="flex flex-col">
+          {/* Input/Output Pane */}
+          <Card className="flex flex-col bg-transparent border-gray-700">
              <CardContent className="flex-1 flex flex-col p-4 space-y-4">
-                {/* Sample Input Section */}
                 <div>
                   <h3 className="font-semibold mb-2 text-sm">Input (stdin)</h3>
                   <Textarea
                     value={sampleInput}
                     onChange={(e) => setSampleInput(e.target.value)}
-                    className="h-32 resize-none font-mono"
+                    className="h-24 resize-none font-mono bg-card text-card-foreground"
                     placeholder="Enter input here..."
                   />
                 </div>
 
-                {/* Terminal Section */}
+                {/* --- NEW: Results Summary --- */}
+                {output && (
+                  <div>
+                    <h3 className="font-semibold mb-2 text-sm">Results</h3>
+                    <div className="flex flex-wrap gap-4 text-sm">
+                      <div className={`flex items-center gap-2 p-2 rounded-md ${output.status.id === 3 ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                        {output.status.id === 3 ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
+                        <span>{output.status.description}</span>
+                      </div>
+                      <div className="flex items-center gap-2 p-2 rounded-md bg-gray-500/10 text-gray-400">
+                        <Clock size={18} />
+                        <span>{output.time}s</span>
+                      </div>
+                      <div className="flex items-center gap-2 p-2 rounded-md bg-gray-500/10 text-gray-400">
+                        <Database size={18} />
+                        <span>{output.memory} KB</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex-1 flex flex-col">
-                  <h3 className="font-semibold mb-2 text-sm">Output</h3>
-                   <div className="p-1 text-sm text-muted-foreground">{status}</div>
+                  <h3 className="font-semibold mb-2 text-sm">Terminal</h3>
                   <div className="flex-1 bg-black text-white rounded-md p-3 font-mono text-sm overflow-auto">
                     {output?.stdout && <pre>{output.stdout}</pre>}
                     {output?.stderr && <pre className="text-red-400">{output.stderr}</pre>}
                     {output?.compile_output && <pre className="text-yellow-400">{output.compile_output}</pre>}
+                    {!output && <div className="text-gray-500">{status}</div>}
+                    {output && !output.stdout && !output.stderr && !output.compile_output &&
+                      <div className="text-gray-500">Execution successful. No output.</div>
+                    }
                   </div>
                 </div>
-              </CardContent>
+             </CardContent>
           </Card>
         </div>
       </div>
