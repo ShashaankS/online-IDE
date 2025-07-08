@@ -25,7 +25,17 @@ type SubmissionRequestEncoded struct {
 	Stdin      string `json:"stdin"`
 }
 
+func decodeBase64(encoded string) string {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return encoded
+	}
+	return string(decoded)
+}
+
 func judge0Handler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Received submission request")
+	
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
 		return
@@ -33,7 +43,7 @@ func judge0Handler(w http.ResponseWriter, r *http.Request) {
 
 	var reqBody SubmissionRequest
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -45,15 +55,15 @@ func judge0Handler(w http.ResponseWriter, r *http.Request) {
 
 	payloadBytes, err := json.Marshal(encodedReq)
 	if err != nil {
-		http.Error(w, "Failed to marshal payload", http.StatusInternalServerError)
+		http.Error(w, "Failed to marshal payload: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	payload := strings.NewReader(string(payloadBytes))
 
-	url := "https://judge0-ce.p.rapidapi.com/submissions?base64_encoded=true&wait=true&fields=*" 
+	url := "https://judge0-ce.p.rapidapi.com/submissions?base64_encoded=true&wait=true&fields=stdout,stderr,status,time,memory,compile_output"
 	apiReq, err := http.NewRequest("POST", url, payload)
 	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		http.Error(w, "Failed to create request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -64,73 +74,27 @@ func judge0Handler(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{}
 	resp, err := client.Do(apiReq)
 	if err != nil {
-		http.Error(w, "Failed to contact Judge0", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
-
-func getResultHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	token := vars["token"]
-	if token == "" {
-		http.Error(w, "Token required", http.StatusBadRequest)
-		return
-	}
-
-	url := "https://judge0-ce.p.rapidapi.com/submissions/" + token + "?base64_encoded=true&fields=stdout,stderr,status_id,language_id"
-	apiReq, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	apiReq.Header.Set("x-rapidapi-key", os.Getenv("RAPIDAPI_KEY"))
-	apiReq.Header.Add("x-rapidapi-host", "judge0-ce.p.rapidapi.com")
-
-	client := &http.Client{}
-	resp, err := client.Do(apiReq)
-	if err != nil {
-		http.Error(w, "Failed to contact Judge0", http.StatusInternalServerError)
+		http.Error(w, "Failed to contact Judge0: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		http.Error(w, "Failed to read response", http.StatusInternalServerError)
+		http.Error(w, "Failed to read response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		http.Error(w, "Failed to parse JSON", http.StatusInternalServerError)
+		http.Error(w, "Failed to parse JSON: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	decodeBase64 := func(encoded string) string {
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return encoded
+	for _, field := range []string{"stdout", "stderr", "compile_output"} {
+		if val, ok := result[field].(string); ok && val != "" {
+			result[field] = decodeBase64(val)
 		}
-		return string(decoded)
-	}
-
-	if stdout, ok := result["stdout"].(string); ok && stdout != "" {
-		result["stdout"] = decodeBase64(stdout)
-	}
-	if stderr, ok := result["stderr"].(string); ok && stderr != "" {
-		result["stderr"] = decodeBase64(stderr)
-	}
-	if compileOutput, ok := result["compile_output"].(string); ok && compileOutput != "" {
-		result["compile_output"] = decodeBase64(compileOutput)
-	}
-	if message, ok := result["message"].(string); ok && message != "" {
-		result["message"] = decodeBase64(message)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -139,15 +103,18 @@ func getResultHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: Could not load .env file (may be fine in production)")
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
 	r := mux.NewRouter()
 	r.HandleFunc("/submit", judge0Handler).Methods("POST")
-	r.HandleFunc("/result/{token}", getResultHandler).Methods("GET")
 
-	log.Println("Server started on :8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Printf("Server started on :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, r))
 }
